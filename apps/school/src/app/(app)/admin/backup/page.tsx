@@ -1,0 +1,27 @@
+"use client";
+import { useState } from "react";
+import { api, useApi, useMutation } from "@/lib/api";
+import { ago, dateTime } from "@/lib/format";
+import { Badge, Button, DataState, Dialog, EmptyState, ErrorNote, PageHeader, Panel, Stat, StatusBadge, TextField, useToast } from "@/ui/kit";
+import { Can } from "@/ui/session";
+import { DataTable } from "@/ui/table";
+
+interface B { id: string; kind: string; status: string; sizeBytes: number | null; startedAt: string; verifiedAt: string | null; error: string | null; path: string | null }
+interface D { backups: B[]; health: { lastBackupAt: string | null; lastVerifiedAt: string | null; ageHours: number | null; stale: boolean } }
+
+export default function Backup() {
+  const q = useApi<D>("/backup"); const toast = useToast(); const [restore, setRestore] = useState<B | null>(null); const [confirm, setConfirm] = useState(""); const [pw, setPw] = useState("");
+  const site = useApi<{ installation: { installationCode: string } }>("/sync/status");
+  const run = useMutation(async () => { const r = await api.post<{ rows: number }>("/backup/run"); toast.push("ok", `Backup complete — ${r.rows.toLocaleString()} records`); q.reload(); });
+  const verify = useMutation(async (id: string, deep: boolean) => { const r = await api.post<{ ok: boolean; checks: { name: string; ok: boolean; detail?: string }[] }>(`/backup/${id}/verify`, { deep }); toast.push(r.ok ? "ok" : "bad", r.ok ? "Backup verified — it can be restored" : `Verification failed: ${r.checks.find((c) => !c.ok)?.detail ?? r.checks.find((c) => !c.ok)?.name}`); q.reload(); });
+  const doRestore = useMutation(async () => { const r = await api.post<{ restoredRows: number }>(`/backup/${restore!.id}/restore`, { confirm, password: pw }); toast.push("ok", `Restored ${r.restoredRows.toLocaleString()} records`); setRestore(null); setTimeout(() => location.assign("/"), 1200); });
+  const code = site.data?.installation.installationCode ?? "";
+  return (<><PageHeader title="Backup and recovery" description="Backups are complete copies of the school's data, encrypted and checked. They are separate from cloud sync. Keep a copy off the server (a USB drive or the cloud)." actions={<Can perm={["backup.run"]}><Button icon="database" loading={run.pending} onClick={() => void run.run()}>Back up now</Button></Can>} />
+    <ErrorNote error={run.error ?? verify.error} />
+    <DataState query={q}>{(d) => (<div className="space-y-6">
+      <div className="grid gap-3 sm:grid-cols-3"><Stat label="Last backup" value={d.health.lastBackupAt ? ago(d.health.lastBackupAt) : "Never"} tone={d.health.stale ? "bad" : "ok"} note={d.health.stale ? "Back up now — it has been too long" : undefined} /><Stat label="Last verified restorable" value={d.health.lastVerifiedAt ? ago(d.health.lastVerifiedAt) : "Never"} tone={d.health.lastVerifiedAt ? "ok" : "warn"} /><Stat label="Automatic schedule" value="Nightly, 02:00" note="Verified every night; a full restore-test each Sunday" /></div>
+      {d.backups.length === 0 ? <Panel><EmptyState title="No backups yet" icon="database" /></Panel> : <DataTable rows={d.backups} rowKey={(b) => b.id} rule={(b) => (b.status === "FAILED" ? "bad" : b.verifiedAt ? "ok" : "warn")} columns={[{ key: "d", header: "When", cell: (b) => dateTime(b.startedAt) }, { key: "k", header: "Where", cell: (b) => (b.kind === "CLOUD" ? <Badge tone="info" icon="cloud">Cloud copy</Badge> : "This server") }, { key: "z", header: "Size", align: "right", cell: (b) => (b.sizeBytes ? `${(b.sizeBytes / 1e6).toFixed(1)} MB` : "—") }, { key: "s", header: "Status", cell: (b) => <StatusBadge status={b.status} /> }, { key: "v", header: "Verified", cell: (b) => (b.verifiedAt ? <Badge tone="ok" icon="check">{ago(b.verifiedAt)}</Badge> : <Badge tone="warn">Not yet</Badge>) }, { key: "a", header: "", cell: (b) => b.status === "SUCCEEDED" && b.path && b.kind === "LOCAL" ? (<div className="flex flex-wrap gap-1"><Can perm={["backup.run"]}><Button size="sm" variant="ghost" onClick={() => void verify.run(b.id, false)}>Verify</Button><Button size="sm" variant="ghost" onClick={() => void verify.run(b.id, true)}>Restore-test</Button></Can><Can perm={["backup.restore"]}><a className="inline-flex min-h-9 items-center px-2 font-bold text-brand-700 underline" href={`/api/backup/${b.id}/download`}>Download</a><Button size="sm" variant="ghost" onClick={() => setRestore(b)}>Restore…</Button></Can></div>) : b.error ? <span className="text-pen-700">{b.error}</span> : null }]} />}
+    </div>)}</DataState>
+    <Dialog open={!!restore} onClose={() => setRestore(null)} title="Restore this backup?" footer={<><Button variant="secondary" onClick={() => setRestore(null)}>Cancel</Button><Button variant="danger" loading={doRestore.pending} disabled={confirm.trim() !== `RESTORE ${code}` || !pw} onClick={() => void doRestore.run()}>Replace all data</Button></>}>
+      <div className="space-y-4"><p className="rounded bg-pen-100 p-3 font-bold text-pen-700">This replaces ALL current data with the backup from {restore && dateTime(restore.startedAt)}. Anything entered since then is lost from the live system. A safety backup of the current state is taken first.</p><TextField label={`Type RESTORE ${code} to confirm`} value={confirm} onChange={(e) => setConfirm(e.target.value)} /><TextField label="Your password" type="password" value={pw} onChange={(e) => setPw(e.target.value)} autoComplete="current-password" /><ErrorNote error={doRestore.error} /></div></Dialog></>);
+}

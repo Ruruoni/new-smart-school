@@ -1,0 +1,18 @@
+{
+  "yearId": "ccb3bd64-4b8e-4a8c-96f7-f459db9e4739",
+  "termId": "c91ff6ac-d883-40b7-83a4-2ab9918889f3",
+  "term2Id": "5cfbdc75-ed0b-4b92-9dac-eba9c5ef0419",
+  "jss1": "3bff105d-424e-43db-a693-6124cf8843a8",
+  "jss2": "1dc418a6-1139-4acd-9197-a4031644d280",
+  "ss1": "d91d13b4-6058-46b1-b6f0-13996c1dbb15",
+  "secA": "361c8f0d-dc69-4e70-8183-1a780746ec16",
+  "math": "c98e7fe5-e784-4b25-891b-5b16222db93d",
+  "eng": "e2971993-faaf-4af5-a4e6-7303caef04b0",
+  "teacher": {
+    "id": "d2d2b6e4-a0f4-455c-94e1-be1a3705afc0",
+    "userId": "ba76853f-3383-49b4-a73c-525aeea12f29",
+    "username": "emeka.nwosu",
+    "password": "Teacher-pass-1"
+  },
+  "classSubjectId": "4187f126-e9a1-41d8-86e8-9078671b05d4"
+}

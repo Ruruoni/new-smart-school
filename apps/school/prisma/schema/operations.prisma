@@ -1,0 +1,180 @@
+// ───────────────────────── ATTENDANCE / TIMETABLE / LESSON NOTES ─────────────────────────
+
+enum AttendanceStatus {
+  PRESENT
+  LATE
+  ABSENT
+  EXCUSED
+}
+
+enum AttendanceMethod {
+  MANUAL
+  QR
+  RFID
+  FINGERPRINT
+}
+
+enum DeviceKind {
+  QR_SCANNER
+  RFID_READER
+  FINGERPRINT_READER
+  TABLET
+}
+
+/// Attendance is recorded offline-first. Exactly one of studentId / staffUserId is set (CHECK in migration).
+model AttendanceLog {
+  id           String           @id @default(uuid()) @db.Uuid
+  studentId    String?          @db.Uuid
+  staffUserId  String?          @db.Uuid
+  /// Calendar day in the school's timezone.
+  date         DateTime         @db.Date
+  /// "DAY" for daily roll call, or e.g. a timetable slot id for per-period attendance.
+  session      String           @default("DAY")
+  status       AttendanceStatus
+  method       AttendanceMethod @default(MANUAL)
+  checkedInAt  DateTime?
+  deviceId     String?          @db.Uuid
+  recordedById String?          @db.Uuid
+  note         String?
+  version      Int              @default(1)
+  createdAt    DateTime         @default(now())
+  updatedAt    DateTime         @updatedAt
+
+  student StudentProfile?   @relation(fields: [studentId], references: [id], onDelete: Restrict)
+  device  AttendanceDevice? @relation(fields: [deviceId], references: [id], onDelete: SetNull)
+
+  @@unique([studentId, date, session])
+  @@unique([staffUserId, date, session])
+  @@index([date, status])
+  @@map("attendance_logs")
+}
+
+/// Integration boundary for RFID/QR/fingerprint hardware. Devices authenticate with a hashed API key.
+model AttendanceDevice {
+  id         String     @id @default(uuid()) @db.Uuid
+  name       String     @unique
+  kind       DeviceKind
+  location   String?
+  apiKeyHash String     @unique
+  isActive   Boolean    @default(true)
+  lastSeenAt DateTime?
+  createdAt  DateTime   @default(now())
+
+  logs AttendanceLog[]
+
+  @@map("attendance_devices")
+}
+
+enum TimetableStatus {
+  DRAFT
+  ACTIVE
+  ARCHIVED
+}
+
+model Timetable {
+  id        String          @id @default(uuid()) @db.Uuid
+  termId    String          @db.Uuid
+  name      String
+  status    TimetableStatus @default(DRAFT)
+  createdAt DateTime        @default(now())
+  updatedAt DateTime        @updatedAt
+
+  term  Term            @relation(fields: [termId], references: [id], onDelete: Restrict)
+  slots TimetableSlot[]
+
+  @@unique([termId, name])
+  @@map("timetables")
+}
+
+/// dayOfWeek 1=Mon … 7=Sun; periodIndex is the ordinal period of the day.
+/// The unique indexes below make double-booking impossible at the database level, independent of app code.
+model TimetableSlot {
+  id          String   @id @default(uuid()) @db.Uuid
+  timetableId String   @db.Uuid
+  dayOfWeek   Int
+  periodIndex Int
+  startTime   String // "08:00"
+  endTime     String // "08:40"
+  classId     String   @db.Uuid
+  sectionKey  String   @default("*") // section id or "*" for whole class (unique-friendly)
+  sectionId   String?  @db.Uuid
+  subjectId   String   @db.Uuid
+  teacherId   String   @db.Uuid
+  roomId      String?  @db.Uuid
+  resourceId  String?  @db.Uuid
+  createdAt   DateTime @default(now())
+
+  timetable Timetable      @relation(fields: [timetableId], references: [id], onDelete: Cascade)
+  class     SchoolClass    @relation(fields: [classId], references: [id], onDelete: Restrict)
+  section   Section?       @relation(fields: [sectionId], references: [id], onDelete: SetNull)
+  subject   Subject        @relation(fields: [subjectId], references: [id], onDelete: Restrict)
+  teacher   TeacherProfile @relation(fields: [teacherId], references: [id], onDelete: Restrict)
+  room      Room?          @relation(fields: [roomId], references: [id], onDelete: SetNull)
+  resource  Resource?      @relation(fields: [resourceId], references: [id], onDelete: SetNull)
+
+  @@unique([timetableId, dayOfWeek, periodIndex, teacherId])
+  @@unique([timetableId, dayOfWeek, periodIndex, roomId])
+  @@unique([timetableId, dayOfWeek, periodIndex, resourceId])
+  @@unique([timetableId, dayOfWeek, periodIndex, classId, sectionKey])
+  @@index([teacherId])
+  @@index([classId])
+  @@map("timetable_slots")
+}
+
+enum NoteStatus {
+  DRAFT
+  PUBLISHED
+}
+
+model LessonNote {
+  id             String     @id @default(uuid()) @db.Uuid
+  teacherId      String     @db.Uuid
+  subjectId      String     @db.Uuid
+  classId        String     @db.Uuid
+  topic          String
+  title          String
+  body           String
+  status         NoteStatus @default(DRAFT)
+  currentVersion Int        @default(1)
+  publishedAt    DateTime?
+  version        Int        @default(1)
+  createdAt      DateTime   @default(now())
+  updatedAt      DateTime   @updatedAt
+
+  teacher     TeacherProfile         @relation(fields: [teacherId], references: [id], onDelete: Restrict)
+  subject     Subject                @relation(fields: [subjectId], references: [id], onDelete: Restrict)
+  class       SchoolClass            @relation(fields: [classId], references: [id], onDelete: Restrict)
+  versions    LessonNoteVersion[]
+  attachments LessonNoteAttachment[]
+
+  @@index([classId, subjectId, status])
+  @@index([teacherId])
+  @@index([subjectId])
+  @@map("lesson_notes")
+}
+
+model LessonNoteVersion {
+  id        String   @id @default(uuid()) @db.Uuid
+  noteId    String   @db.Uuid
+  versionNo Int
+  title     String
+  body      String
+  createdAt DateTime @default(now())
+
+  note LessonNote @relation(fields: [noteId], references: [id], onDelete: Cascade)
+
+  @@unique([noteId, versionNo])
+  @@map("lesson_note_versions")
+}
+
+model LessonNoteAttachment {
+  id        String   @id @default(uuid()) @db.Uuid
+  noteId    String   @db.Uuid
+  fileId    String   @db.Uuid
+  createdAt DateTime @default(now())
+
+  note LessonNote @relation(fields: [noteId], references: [id], onDelete: Cascade)
+
+  @@index([noteId])
+  @@map("lesson_note_attachments")
+}

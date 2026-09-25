@@ -1,0 +1,216 @@
+// ───────────────────────── ASSESSMENT & RESULTS ─────────────────────────
+// Grading is configuration, not code: schemes, grade bands and CA/exam components are per school.
+
+model GradingScheme {
+  id             String   @id @default(uuid()) @db.Uuid
+  name           String   @unique
+  isDefault      Boolean  @default(false)
+  /// How class positions are computed/tied ("STANDARD_COMPETITION" | "DENSE").
+  positionMethod String   @default("STANDARD_COMPETITION")
+  version        Int      @default(1)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  rules      GradeRule[]
+  components AssessmentType[]
+
+  @@map("grading_schemes")
+}
+
+model GradeRule {
+  id         String   @id @default(uuid()) @db.Uuid
+  schemeId   String   @db.Uuid
+  grade      String // "A1", "B2", "F9"
+  minScore   Decimal  @db.Decimal(5, 2) // inclusive
+  maxScore   Decimal  @db.Decimal(5, 2) // inclusive
+  remark     String? // "Excellent"
+  gradePoint Decimal? @db.Decimal(4, 2)
+  isPass     Boolean  @default(true)
+
+  scheme GradingScheme @relation(fields: [schemeId], references: [id], onDelete: Cascade)
+
+  @@unique([schemeId, grade])
+  @@index([schemeId, minScore])
+  @@map("grade_rules")
+}
+
+/// A configurable score component, e.g. "CA 1" (max 10), "Exam" (max 60). Component maxima sum to 100.
+model AssessmentType {
+  id        String  @id @default(uuid()) @db.Uuid
+  schemeId  String  @db.Uuid
+  name      String
+  code      String
+  maxScore  Decimal @db.Decimal(5, 2)
+  isExam    Boolean @default(false)
+  sortOrder Int     @default(0)
+
+  scheme      GradingScheme @relation(fields: [schemeId], references: [id], onDelete: Cascade)
+  assessments Assessment[]
+
+  @@unique([schemeId, code])
+  @@map("assessment_types")
+}
+
+enum AssessmentStatus {
+  OPEN
+  LOCKED
+}
+
+/// One scored event (a CA test, the exam) for a class-subject in a term.
+model Assessment {
+  id             String           @id @default(uuid()) @db.Uuid
+  classSubjectId String           @db.Uuid
+  termId         String           @db.Uuid
+  typeId         String           @db.Uuid
+  title          String
+  maxScore       Decimal          @db.Decimal(5, 2)
+  heldOn         DateTime?        @db.Date
+  status         AssessmentStatus @default(OPEN)
+  createdById    String?          @db.Uuid
+  version        Int              @default(1)
+  createdAt      DateTime         @default(now())
+  updatedAt      DateTime         @updatedAt
+
+  classSubject ClassSubject      @relation(fields: [classSubjectId], references: [id], onDelete: Restrict)
+  term         Term              @relation(fields: [termId], references: [id], onDelete: Restrict)
+  type         AssessmentType    @relation(fields: [typeId], references: [id], onDelete: Restrict)
+  scores       AssessmentScore[]
+
+  @@unique([classSubjectId, termId, typeId])
+  @@index([termId])
+  @@map("assessments")
+}
+
+model AssessmentScore {
+  id           String   @id @default(uuid()) @db.Uuid
+  assessmentId String   @db.Uuid
+  studentId    String   @db.Uuid
+  score        Decimal? @db.Decimal(5, 2)
+  isAbsent     Boolean  @default(false)
+  remark       String?
+  enteredById  String?  @db.Uuid
+  version      Int      @default(1)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  assessment Assessment     @relation(fields: [assessmentId], references: [id], onDelete: Cascade)
+  student    StudentProfile @relation(fields: [studentId], references: [id], onDelete: Restrict)
+
+  @@unique([assessmentId, studentId])
+  @@index([studentId])
+  @@map("assessment_scores")
+}
+
+/// A scheduled examination session (timetable of papers) for a class in a term.
+model Examination {
+  id        String   @id @default(uuid()) @db.Uuid
+  termId    String   @db.Uuid
+  classId   String   @db.Uuid
+  name      String
+  startDate DateTime @db.Date
+  endDate   DateTime @db.Date
+  notes     String?
+  createdAt DateTime @default(now())
+
+  term  Term        @relation(fields: [termId], references: [id], onDelete: Restrict)
+  class SchoolClass @relation(fields: [classId], references: [id], onDelete: Restrict)
+
+  @@index([termId, classId])
+  @@index([classId])
+  @@map("examinations")
+}
+
+enum ResultStatus {
+  DRAFT
+  PUBLISHED
+  WITHDRAWN
+}
+
+/// Processed subject result for one student in one term (output of the result-processing engine).
+model ExamResult {
+  id              String       @id @default(uuid()) @db.Uuid
+  studentId       String       @db.Uuid
+  termId          String       @db.Uuid
+  classSubjectId  String       @db.Uuid
+  caTotal         Decimal      @db.Decimal(6, 2)
+  examScore       Decimal      @db.Decimal(6, 2)
+  total           Decimal      @db.Decimal(6, 2)
+  percentage      Decimal      @db.Decimal(5, 2)
+  grade           String
+  remark          String?
+  subjectPosition Int?
+  classAverage    Decimal?     @db.Decimal(5, 2)
+  breakdown       Json         @default("{}")
+  status          ResultStatus @default(DRAFT)
+  publishedAt     DateTime?
+  publishedById   String?      @db.Uuid
+  version         Int          @default(1)
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+
+  student      StudentProfile @relation(fields: [studentId], references: [id], onDelete: Restrict)
+  term         Term           @relation(fields: [termId], references: [id], onDelete: Restrict)
+  classSubject ClassSubject   @relation(fields: [classSubjectId], references: [id], onDelete: Restrict)
+
+  @@unique([studentId, termId, classSubjectId])
+  @@index([termId, status])
+  @@index([classSubjectId, termId])
+  @@map("exam_results")
+}
+
+model ReportCard {
+  id                String       @id @default(uuid()) @db.Uuid
+  studentId         String       @db.Uuid
+  termId            String       @db.Uuid
+  classId           String       @db.Uuid
+  totalScore        Decimal      @db.Decimal(8, 2)
+  average           Decimal      @db.Decimal(5, 2)
+  position          Int?
+  classSize         Int?
+  subjectsCount     Int
+  /// Cumulative average across the academic year up to this term.
+  cumulativeAverage Decimal?     @db.Decimal(5, 2)
+  teacherRemark     String?
+  principalRemark   String?
+  attendanceSummary Json         @default("{}")
+  status            ResultStatus @default(DRAFT)
+  publishedAt       DateTime?
+  publishedById     String?      @db.Uuid
+  version           Int          @default(1)
+  createdAt         DateTime     @default(now())
+  updatedAt         DateTime     @updatedAt
+
+  student StudentProfile @relation(fields: [studentId], references: [id], onDelete: Restrict)
+  term    Term           @relation(fields: [termId], references: [id], onDelete: Restrict)
+
+  @@unique([studentId, termId])
+  @@index([termId, classId, status])
+  @@map("report_cards")
+}
+
+enum PromotionDecision {
+  PROMOTED
+  REPEATED
+  GRADUATED
+  WITHDRAWN
+}
+
+model PromotionRecord {
+  id               String            @id @default(uuid()) @db.Uuid
+  studentId        String            @db.Uuid
+  fromEnrollmentId String            @db.Uuid
+  toClassId        String?           @db.Uuid
+  academicYearId   String            @db.Uuid
+  decision         PromotionDecision
+  basis            Json              @default("{}")
+  decidedById      String?           @db.Uuid
+  decidedAt        DateTime          @default(now())
+
+  student        StudentProfile @relation(fields: [studentId], references: [id], onDelete: Restrict)
+  fromEnrollment Enrollment     @relation(fields: [fromEnrollmentId], references: [id], onDelete: Restrict)
+  toClass        SchoolClass?   @relation(fields: [toClassId], references: [id], onDelete: SetNull)
+  academicYear   AcademicYear   @relation(fields: [academicYearId], references: [id], onDelete: Restrict)
+
+  @@unique([studentId, academicYearId])
+  @@map("promotion_records")
+}

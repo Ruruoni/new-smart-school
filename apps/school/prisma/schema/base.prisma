@@ -1,0 +1,13 @@
+// SmartSchool ERP 2.0 — SCHOOL INSTALLATION database (one PostgreSQL database per school).
+// Not multi-tenant: every school runs its own instance, so there is no tenant column anywhere.
+// IDs are UUIDs so records created offline (or on several devices) never collide.
+generator client {
+  provider            = "prisma-client"
+  output              = "../../src/generated/prisma"
+  moduleFormat        = "esm"
+  importFileExtension = ""
+}
+
+datasource db {
+  provider = "postgresql"
+}

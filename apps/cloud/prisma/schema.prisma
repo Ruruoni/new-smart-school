@@ -1,0 +1,278 @@
+// SmartSchool CLOUD CONTROL PLANE database.
+// Holds installation registry, licensing, monitoring and the (allow-listed) records schools sync up.
+// It never contains a school's full database.
+generator client {
+  provider            = "prisma-client"
+  output              = "../src/generated/prisma"
+  moduleFormat        = "esm"
+  importFileExtension = ""
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum InstallationStatus {
+  PENDING
+  ACTIVE
+  SUSPENDED
+  DECOMMISSIONED
+}
+
+model Installation {
+  id               String             @id @default(uuid()) @db.Uuid
+  /// Public identity the school presents, e.g. "SS-7F3K9Q".
+  code             String             @unique
+  schoolName       String
+  state            String?
+  contactName      String?
+  contactEmail     String?
+  contactPhone     String?
+  status           InstallationStatus @default(PENDING)
+  /// The shared HMAC secret issued at registration, AES-256-GCM encrypted with CLOUD_ENCRYPTION_KEY.
+  secretEnc        String?
+  plan             String             @default("standard")
+  modules          String[]
+  /// Per-installation feature overrides pushed to the school: { "communication.sms": true }.
+  featureOverrides Json               @default("{}")
+  licenseIssuedAt  DateTime?
+  licenseExpiresAt DateTime?
+  graceDays        Int                @default(30)
+  suspendedAt      DateTime?
+  suspendedReason  String?
+  registeredAt     DateTime?
+  lastHeartbeatAt  DateTime?
+  lastSyncAt       DateTime?
+  lastIp           String?
+  appVersion       String?
+  schemaVersion    String?
+  lastMetrics      Json?
+  studentCount     Int                @default(0)
+  notes            String?
+  createdAt        DateTime           @default(now())
+  updatedAt        DateTime           @updatedAt
+
+  tokens     RegistrationToken[]
+  heartbeats HeartbeatLog[]
+  records    SyncedRecord[]
+  ingest     SyncIngest[]
+  conflicts  CloudConflict[]
+  commands   Command[]
+  alerts     Alert[]
+  backups    BackupUpload[]
+
+  @@index([status])
+  @@index([lastHeartbeatAt])
+  @@map("installations")
+}
+
+model RegistrationToken {
+  id             String    @id @default(uuid()) @db.Uuid
+  tokenHash      String    @unique
+  installationId String    @db.Uuid
+  expiresAt      DateTime
+  usedAt         DateTime?
+  createdById    String?   @db.Uuid
+  createdAt      DateTime  @default(now())
+
+  installation Installation @relation(fields: [installationId], references: [id], onDelete: Cascade)
+
+  @@map("registration_tokens")
+}
+
+enum OperatorRole {
+  SUPER_ADMIN
+  SUPPORT
+  VIEWER
+}
+
+model Operator {
+  id           String       @id @default(uuid()) @db.Uuid
+  email        String       @unique
+  name         String
+  passwordHash String
+  role         OperatorRole @default(VIEWER)
+  isActive     Boolean      @default(true)
+  failedLogins Int          @default(0)
+  lockedUntil  DateTime?
+  lastLoginAt  DateTime?
+  createdAt    DateTime     @default(now())
+
+  sessions OperatorSession[]
+  audits   CloudAudit[]
+
+  @@map("operators")
+}
+
+model OperatorSession {
+  id         String    @id @default(uuid()) @db.Uuid
+  operatorId String    @db.Uuid
+  tokenHash  String    @unique
+  expiresAt  DateTime
+  createdAt  DateTime  @default(now())
+  revokedAt  DateTime?
+
+  operator Operator @relation(fields: [operatorId], references: [id], onDelete: Cascade)
+
+  @@index([operatorId])
+  @@map("operator_sessions")
+}
+
+model HeartbeatLog {
+  id             String   @id @default(uuid()) @db.Uuid
+  installationId String   @db.Uuid
+  receivedAt     DateTime @default(now())
+  metrics        Json
+  appVersion     String?
+
+  installation Installation @relation(fields: [installationId], references: [id], onDelete: Cascade)
+
+  @@index([installationId, receivedAt])
+  @@map("heartbeat_logs")
+}
+
+/// Latest known copy of each synced record (per installation). A replica for monitoring/central reporting — not authoritative.
+model SyncedRecord {
+  id             String   @id @default(uuid()) @db.Uuid
+  installationId String   @db.Uuid
+  entityType     String
+  entityId       String
+  version        Int
+  payload        Json
+  payloadHash    String
+  deleted        Boolean  @default(false)
+  recordedAt     DateTime // when the school created the sync record
+  receivedAt     DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  installation Installation @relation(fields: [installationId], references: [id], onDelete: Cascade)
+
+  @@unique([installationId, entityType, entityId])
+  @@index([installationId, entityType])
+  @@map("synced_records")
+}
+
+/// One row per accepted idempotency key. The unique index makes replays/duplicates provably harmless.
+model SyncIngest {
+  id             String   @id @default(uuid()) @db.Uuid
+  installationId String   @db.Uuid
+  idempotencyKey String
+  outcome        String // ACKED | DUPLICATE | CONFLICT | REJECTED
+  receivedAt     DateTime @default(now())
+
+  installation Installation @relation(fields: [installationId], references: [id], onDelete: Cascade)
+
+  @@unique([installationId, idempotencyKey])
+  @@index([receivedAt])
+  @@map("sync_ingest")
+}
+
+model CloudConflict {
+  id              String    @id @default(uuid()) @db.Uuid
+  installationId  String    @db.Uuid
+  entityType      String
+  entityId        String
+  incomingVersion Int
+  storedVersion   Int
+  incomingPayload Json
+  storedPayload   Json
+  detectedAt      DateTime  @default(now())
+  resolvedAt      DateTime?
+
+  installation Installation @relation(fields: [installationId], references: [id], onDelete: Cascade)
+
+  @@index([installationId, resolvedAt])
+  @@map("cloud_conflicts")
+}
+
+model Command {
+  /// The JWS `jti`.
+  id             String    @id @default(uuid()) @db.Uuid
+  installationId String    @db.Uuid
+  type           String
+  args           Json      @default("{}")
+  issuedAt       DateTime  @default(now())
+  expiresAt      DateTime
+  deliveredAt    DateTime?
+  issuedById     String?   @db.Uuid
+
+  installation Installation @relation(fields: [installationId], references: [id], onDelete: Cascade)
+
+  @@index([installationId, deliveredAt])
+  @@map("commands")
+}
+
+model GlobalFlag {
+  key         String   @id
+  enabled     Boolean  @default(false)
+  description String?
+  updatedAt   DateTime @updatedAt
+
+  @@map("global_flags")
+}
+
+model Release {
+  id          String   @id @default(uuid()) @db.Uuid
+  version     String   @unique
+  notes       String?
+  mandatory   Boolean  @default(false)
+  publishedAt DateTime @default(now())
+
+  @@map("releases")
+}
+
+enum AlertSeverity {
+  INFO
+  WARNING
+  CRITICAL
+}
+
+model Alert {
+  id             String        @id @default(uuid()) @db.Uuid
+  installationId String        @db.Uuid
+  kind           String // OFFLINE | SYNC_BACKLOG | SYNC_FAILURES | OPEN_CONFLICTS | BACKUP_STALE | LICENSE_EXPIRING | WORKER_DOWN | DB_DOWN | VERSION_OUTDATED
+  severity       AlertSeverity
+  message        String
+  openedAt       DateTime      @default(now())
+  resolvedAt     DateTime?
+  acknowledgedAt DateTime?
+
+  installation Installation @relation(fields: [installationId], references: [id], onDelete: Cascade)
+
+  @@index([installationId, resolvedAt])
+  @@index([resolvedAt, severity])
+  @@map("alerts")
+}
+
+model BackupUpload {
+  id             String   @id @default(uuid()) @db.Uuid
+  installationId String   @db.Uuid
+  fileName       String
+  sizeBytes      BigInt
+  sha256         String
+  storagePath    String
+  receivedAt     DateTime @default(now())
+
+  installation Installation @relation(fields: [installationId], references: [id], onDelete: Cascade)
+
+  @@index([installationId, receivedAt])
+  @@map("backup_uploads")
+}
+
+/// Append-only record of every operator action (feature flags, licensing, suspension…).
+model CloudAudit {
+  id             String   @id @default(uuid()) @db.Uuid
+  seq            BigInt   @unique @default(autoincrement())
+  occurredAt     DateTime @default(now())
+  operatorId     String?  @db.Uuid
+  operatorEmail  String?
+  action         String
+  installationId String?  @db.Uuid
+  detail         Json?
+  ip             String?
+
+  operator Operator? @relation(fields: [operatorId], references: [id], onDelete: SetNull)
+
+  @@index([installationId, occurredAt])
+  @@map("cloud_audit")
+}

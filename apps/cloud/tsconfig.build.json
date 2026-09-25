@@ -1,0 +1,6 @@
+{
+  // Used only by `next build`: production code, not the test suites (those are type-checked by `pnpm typecheck`).
+  "extends": "./tsconfig.json",
+  "include": ["next-env.d.ts", "src/**/*.ts", "src/**/*.tsx", ".next/types/**/*.ts"],
+  "exclude": ["node_modules", "tests", "e2e", "scripts"]
+}

@@ -1,0 +1,274 @@
+// ───────────────────────── FINANCE ─────────────────────────
+// Ledger-oriented, append-only. There is deliberately NO `student.balance` column: balances are derived
+// from invoices, allocations and ledger journals. Corrections are reversals that preserve history.
+
+model FeeStructure {
+  id             String   @id @default(uuid()) @db.Uuid
+  name           String
+  academicYearId String?  @db.Uuid
+  termId         String?  @db.Uuid
+  /// Null class = applies to every class.
+  classId        String?  @db.Uuid
+  isActive       Boolean  @default(true)
+  version        Int      @default(1)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  academicYear AcademicYear?      @relation(fields: [academicYearId], references: [id], onDelete: SetNull)
+  term         Term?              @relation(fields: [termId], references: [id], onDelete: SetNull)
+  class        SchoolClass?       @relation(fields: [classId], references: [id], onDelete: SetNull)
+  items        FeeStructureItem[]
+  studentFees  StudentFee[]
+
+  @@index([termId, classId])
+  @@index([classId])
+  @@index([academicYearId])
+  @@map("fee_structures")
+}
+
+model FeeStructureItem {
+  id             String  @id @default(uuid()) @db.Uuid
+  feeStructureId String  @db.Uuid
+  name           String // "Tuition", "PTA levy", "Uniform"
+  category       String  @default("TUITION")
+  amount         Decimal @db.Decimal(14, 2)
+  isOptional     Boolean @default(false)
+  sortOrder      Int     @default(0)
+
+  feeStructure FeeStructure @relation(fields: [feeStructureId], references: [id], onDelete: Cascade)
+
+  @@index([feeStructureId])
+  @@map("fee_structure_items")
+}
+
+/// A fee structure assigned to a student for a term (billing input).
+model StudentFee {
+  id             String   @id @default(uuid()) @db.Uuid
+  studentId      String   @db.Uuid
+  feeStructureId String   @db.Uuid
+  termId         String   @db.Uuid
+  invoiceId      String?  @db.Uuid
+  createdAt      DateTime @default(now())
+
+  student      StudentProfile @relation(fields: [studentId], references: [id], onDelete: Restrict)
+  feeStructure FeeStructure   @relation(fields: [feeStructureId], references: [id], onDelete: Restrict)
+  term         Term           @relation(fields: [termId], references: [id], onDelete: Restrict)
+  invoice      Invoice?       @relation(fields: [invoiceId], references: [id], onDelete: SetNull)
+
+  @@unique([studentId, feeStructureId, termId])
+  @@index([invoiceId])
+  @@index([termId])
+  @@index([feeStructureId])
+  @@map("student_fees")
+}
+
+enum DiscountKind {
+  DISCOUNT
+  SCHOLARSHIP
+}
+
+enum DiscountValueType {
+  PERCENT
+  FIXED
+}
+
+model StudentDiscount {
+  id           String            @id @default(uuid()) @db.Uuid
+  studentId    String            @db.Uuid
+  kind         DiscountKind
+  valueType    DiscountValueType
+  value        Decimal           @db.Decimal(14, 2)
+  reason       String
+  /// Null = every term until revoked.
+  termId       String?           @db.Uuid
+  approvedById String?           @db.Uuid
+  revokedAt    DateTime?
+  createdAt    DateTime          @default(now())
+
+  student StudentProfile @relation(fields: [studentId], references: [id], onDelete: Restrict)
+
+  @@index([studentId])
+  @@map("student_discounts")
+}
+
+enum InvoiceStatus {
+  DRAFT
+  ISSUED
+  PARTIALLY_PAID
+  PAID
+  VOID
+}
+
+model Invoice {
+  id                String        @id @default(uuid()) @db.Uuid
+  number            String        @unique
+  studentId         String?       @db.Uuid
+  termId            String?       @db.Uuid
+  /// Application-fee invoices belong to an applicant who is not a student yet.
+  admissionRecordId String?       @db.Uuid
+  status            InvoiceStatus @default(DRAFT)
+  issuedAt          DateTime?
+  dueDate           DateTime?     @db.Date
+  subtotal          Decimal       @db.Decimal(14, 2)
+  discountTotal     Decimal       @default(0) @db.Decimal(14, 2)
+  total             Decimal       @db.Decimal(14, 2)
+  /// Maintained inside the payment transaction; verifiable against allocations (see finance/verify).
+  amountPaid        Decimal       @default(0) @db.Decimal(14, 2)
+  notes             String?
+  voidedAt          DateTime?
+  voidReason        String?
+  createdById       String?       @db.Uuid
+  version           Int           @default(1)
+  createdAt         DateTime      @default(now())
+  updatedAt         DateTime      @updatedAt
+
+  student     StudentProfile?     @relation(fields: [studentId], references: [id], onDelete: Restrict)
+  term        Term?               @relation(fields: [termId], references: [id], onDelete: SetNull)
+  items       InvoiceItem[]
+  allocations PaymentAllocation[]
+  studentFees StudentFee[]
+  admission   AdmissionRecord?    @relation("ApplicationFee")
+
+  @@index([studentId, status])
+  @@index([status, dueDate])
+  @@index([termId])
+  @@map("invoices")
+}
+
+enum InvoiceItemKind {
+  CHARGE
+  DISCOUNT
+  SCHOLARSHIP
+}
+
+model InvoiceItem {
+  id          String          @id @default(uuid()) @db.Uuid
+  invoiceId   String          @db.Uuid
+  description String
+  kind        InvoiceItemKind @default(CHARGE)
+  quantity    Int             @default(1)
+  unitAmount  Decimal         @db.Decimal(14, 2)
+  /// Signed: negative for discounts/scholarships.
+  amount      Decimal         @db.Decimal(14, 2)
+
+  invoice Invoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+
+  @@index([invoiceId])
+  @@map("invoice_items")
+}
+
+enum PaymentMethod {
+  CASH
+  BANK_TRANSFER
+  POS
+  CHEQUE
+  ONLINE
+}
+
+enum PaymentStatus {
+  POSTED
+  REVERSED
+}
+
+model Payment {
+  id             String        @id @default(uuid()) @db.Uuid
+  receiptNumber  String        @unique
+  studentId      String?       @db.Uuid
+  payerName      String?
+  amount         Decimal       @db.Decimal(14, 2)
+  method         PaymentMethod
+  reference      String?
+  status         PaymentStatus @default(POSTED)
+  receivedAt     DateTime      @default(now())
+  receivedById   String?       @db.Uuid
+  /// Client-supplied key making retries / offline replays of the same payment safe.
+  idempotencyKey String        @unique
+  reversedAt     DateTime?
+  reversedById   String?       @db.Uuid
+  reversalReason String?
+  version        Int           @default(1)
+  createdAt      DateTime      @default(now())
+
+  student     StudentProfile?     @relation(fields: [studentId], references: [id], onDelete: Restrict)
+  allocations PaymentAllocation[]
+
+  @@index([studentId, receivedAt])
+  @@index([receivedAt])
+  @@map("payments")
+}
+
+model PaymentAllocation {
+  id        String   @id @default(uuid()) @db.Uuid
+  paymentId String   @db.Uuid
+  invoiceId String   @db.Uuid
+  amount    Decimal  @db.Decimal(14, 2)
+  createdAt DateTime @default(now())
+
+  payment Payment @relation(fields: [paymentId], references: [id], onDelete: Restrict)
+  invoice Invoice @relation(fields: [invoiceId], references: [id], onDelete: Restrict)
+
+  @@unique([paymentId, invoiceId])
+  @@index([invoiceId])
+  @@map("payment_allocations")
+}
+
+enum LedgerAccount {
+  CASH
+  RECEIVABLE
+  FEE_REVENUE
+  DISCOUNTS_GIVEN
+  SCHOLARSHIPS_GIVEN
+  STUDENT_CREDIT
+  EXPENSE
+}
+
+/// One journal line. Lines sharing a journalId must have SUM(debit) = SUM(credit) — enforced by a
+/// deferred constraint trigger in the migration, not just application code. Never updated or deleted.
+model FinancialLedger {
+  id                  String        @id @default(uuid()) @db.Uuid
+  seq                 BigInt        @unique @default(autoincrement())
+  journalId           String        @db.Uuid
+  entryDate           DateTime      @default(now())
+  account             LedgerAccount
+  debit               Decimal       @default(0) @db.Decimal(14, 2)
+  credit              Decimal       @default(0) @db.Decimal(14, 2)
+  memo                String?
+  refType             String // "INVOICE" | "PAYMENT" | "PAYMENT_REVERSAL" | "EXPENSE" | ...
+  refId               String        @db.Uuid
+  studentId           String?       @db.Uuid
+  reversalOfJournalId String?       @db.Uuid
+  createdById         String?       @db.Uuid
+
+  @@index([journalId])
+  @@index([refType, refId])
+  @@index([studentId, entryDate])
+  @@index([account, entryDate])
+  @@map("financial_ledger")
+}
+
+enum ExpenseStatus {
+  POSTED
+  VOIDED
+}
+
+model Expense {
+  id           String        @id @default(uuid()) @db.Uuid
+  number       String        @unique
+  category     String
+  description  String
+  vendor       String?
+  amount       Decimal       @db.Decimal(14, 2)
+  paidOn       DateTime      @db.Date
+  method       PaymentMethod @default(CASH)
+  status       ExpenseStatus @default(POSTED)
+  approvedById String?       @db.Uuid
+  recordedById String?       @db.Uuid
+  voidedAt     DateTime?
+  voidReason   String?
+  version      Int           @default(1)
+  createdAt    DateTime      @default(now())
+
+  @@index([paidOn])
+  @@index([category])
+  @@map("expenses")
+}

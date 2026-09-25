@@ -1,0 +1,473 @@
+// ───────────────────────── SHARED SERVICES ─────────────────────────
+// Events, notifications, automation, imports, background jobs, backups, analytics, sync.
+
+/// Transactional outbox / event bus. Modules publish events inside their own DB transaction; the
+/// event worker fans them out to notifications and automation rules.
+model DomainEvent {
+  id            String    @id @default(uuid()) @db.Uuid
+  seq           BigInt    @unique @default(autoincrement())
+  type          String // "attendance.absent", "payment.received", "result.published" …
+  payload       Json
+  occurredAt    DateTime  @default(now())
+  processedAt   DateTime?
+  attempts      Int       @default(0)
+  lastError     String?
+  nextAttemptAt DateTime  @default(now())
+
+  executions AutomationExecution[]
+
+  @@index([processedAt, nextAttemptAt])
+  @@index([type])
+  @@map("domain_events")
+}
+
+enum NotificationChannel {
+  IN_APP
+  EMAIL
+  SMS
+  WHATSAPP
+}
+
+model Notification {
+  id        String    @id @default(uuid()) @db.Uuid
+  userId    String    @db.Uuid
+  type      String
+  title     String
+  body      String
+  data      Json?
+  readAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  user       User                   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  deliveries NotificationDelivery[]
+
+  @@index([userId, readAt, createdAt])
+  @@map("notifications")
+}
+
+model NotificationTemplate {
+  id        String              @id @default(uuid()) @db.Uuid
+  key       String
+  channel   NotificationChannel
+  subject   String?
+  body      String // supports {{placeholders}}
+  isActive  Boolean             @default(true)
+  updatedAt DateTime            @updatedAt
+
+  @@unique([key, channel])
+  @@map("notification_templates")
+}
+
+enum DeliveryStatus {
+  QUEUED
+  SENDING
+  SENT
+  FAILED
+  DEAD
+}
+
+/// Outbound message queue. Rows are created locally (even offline) and delivered when a provider is reachable.
+model NotificationDelivery {
+  id             String              @id @default(uuid()) @db.Uuid
+  notificationId String?             @db.Uuid
+  channel        NotificationChannel
+  provider       String?
+  recipient      String // email address / phone number
+  subject        String?
+  body           String
+  status         DeliveryStatus      @default(QUEUED)
+  attempts       Int                 @default(0)
+  nextAttemptAt  DateTime            @default(now())
+  lastError      String?
+  providerRef    String?
+  sentAt         DateTime?
+  createdAt      DateTime            @default(now())
+
+  notification Notification? @relation(fields: [notificationId], references: [id], onDelete: SetNull)
+
+  @@index([status, nextAttemptAt])
+  @@index([notificationId])
+  @@map("notification_deliveries")
+}
+
+model Announcement {
+  id          String    @id @default(uuid()) @db.Uuid
+  title       String
+  body        String
+  /// {"roles": ["PARENT"], "classIds": [...]} — empty = everyone.
+  audience    Json      @default("{}")
+  publishedAt DateTime?
+  expiresAt   DateTime?
+  createdById String?   @db.Uuid
+  version     Int       @default(1)
+  createdAt   DateTime  @default(now())
+
+  @@index([publishedAt])
+  @@map("announcements")
+}
+
+// ───────────── Automation: EVENT → TRIGGER → CONDITIONS → ACTIONS → EXECUTION LOG ─────────────
+
+model AutomationRule {
+  id          String   @id @default(uuid()) @db.Uuid
+  name        String   @unique
+  description String?
+  isEnabled   Boolean  @default(true)
+  /// All must hold: [{"field":"payload.absenceCount","op":">=","value":3}]
+  conditions  Json     @default("[]")
+  maxRetries  Int      @default(3)
+  isSystem    Boolean  @default(false)
+  version     Int      @default(1)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  triggers   AutomationTrigger[]
+  actions    AutomationAction[]
+  executions AutomationExecution[]
+
+  @@map("automation_rules")
+}
+
+enum TriggerKind {
+  EVENT
+  SCHEDULE
+}
+
+model AutomationTrigger {
+  id          String      @id @default(uuid()) @db.Uuid
+  ruleId      String      @db.Uuid
+  kind        TriggerKind
+  eventType   String?
+  /// Simple schedule: {"everyMinutes": 60} or {"dailyAt": "07:30"} (school timezone).
+  schedule    Json?
+  lastFiredAt DateTime?
+
+  rule AutomationRule @relation(fields: [ruleId], references: [id], onDelete: Cascade)
+
+  @@index([kind, eventType])
+  @@index([ruleId])
+  @@map("automation_triggers")
+}
+
+model AutomationAction {
+  id        String @id @default(uuid()) @db.Uuid
+  ruleId    String @db.Uuid
+  sortOrder Int    @default(0)
+  /// "notify_user" | "notify_guardians" | "queue_message" | "create_announcement" | "emit_event"
+  type      String
+  config    Json   @default("{}")
+
+  rule AutomationRule @relation(fields: [ruleId], references: [id], onDelete: Cascade)
+
+  @@index([ruleId])
+  @@map("automation_actions")
+}
+
+enum ExecutionStatus {
+  SUCCEEDED
+  SKIPPED
+  FAILED
+}
+
+model AutomationExecution {
+  id         String          @id @default(uuid()) @db.Uuid
+  ruleId     String          @db.Uuid
+  eventId    String?         @db.Uuid
+  status     ExecutionStatus
+  startedAt  DateTime        @default(now())
+  finishedAt DateTime?
+  log        Json            @default("[]")
+  error      String?
+
+  rule  AutomationRule @relation(fields: [ruleId], references: [id], onDelete: Cascade)
+  event DomainEvent?   @relation(fields: [eventId], references: [id], onDelete: SetNull)
+
+  @@unique([ruleId, eventId])
+  @@index([ruleId, startedAt])
+  @@map("automation_executions")
+}
+
+// ───────────── Mass ingestion ─────────────
+
+enum ImportStatus {
+  UPLOADED
+  VALIDATED
+  PREVIEW
+  APPROVED
+  PROCESSING
+  COMPLETED
+  FAILED
+  CANCELLED
+}
+
+model ImportJob {
+  id            String       @id @default(uuid()) @db.Uuid
+  kind          String // "STUDENTS", "TEACHERS", "GUARDIANS", …
+  status        ImportStatus @default(UPLOADED)
+  fileId        String       @db.Uuid
+  totalRows     Int          @default(0)
+  validRows     Int          @default(0)
+  errorRows     Int          @default(0)
+  duplicateRows Int          @default(0)
+  importedRows  Int          @default(0)
+  createdById   String?      @db.Uuid
+  approvedById  String?      @db.Uuid
+  report        Json?
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+
+  rows   ImportRow[]
+  errors ImportRowError[]
+
+  @@index([status])
+  @@map("import_jobs")
+}
+
+enum ImportRowStatus {
+  VALID
+  ERROR
+  DUPLICATE
+  IMPORTED
+  SKIPPED
+}
+
+model ImportRow {
+  id         String          @id @default(uuid()) @db.Uuid
+  jobId      String          @db.Uuid
+  rowNumber  Int
+  raw        Json
+  normalized Json?
+  status     ImportRowStatus
+  entityId   String?         @db.Uuid
+
+  job ImportJob @relation(fields: [jobId], references: [id], onDelete: Cascade)
+
+  @@unique([jobId, rowNumber])
+  @@map("import_rows")
+}
+
+model ImportRowError {
+  id        String  @id @default(uuid()) @db.Uuid
+  jobId     String  @db.Uuid
+  rowNumber Int
+  field     String?
+  code      String
+  message   String
+
+  job ImportJob @relation(fields: [jobId], references: [id], onDelete: Cascade)
+
+  @@index([jobId, rowNumber])
+  @@map("import_row_errors")
+}
+
+// ───────────── Background jobs, reports, backups, analytics ─────────────
+
+enum JobStatus {
+  QUEUED
+  RUNNING
+  SUCCEEDED
+  FAILED
+  DEAD
+}
+
+/// Durable job queue (claimed with FOR UPDATE SKIP LOCKED). Survives restarts and power loss.
+model BackgroundJob {
+  id          String    @id @default(uuid()) @db.Uuid
+  queue       String // "imports" | "reports" | "notifications" | "analytics" | "maintenance"
+  type        String
+  payload     Json      @default("{}")
+  status      JobStatus @default(QUEUED)
+  runAt       DateTime  @default(now())
+  attempts    Int       @default(0)
+  maxAttempts Int       @default(5)
+  lockedAt    DateTime?
+  lockedBy    String?
+  lastError   String?
+  /// Optional uniqueness for de-duplicated scheduled jobs.
+  dedupeKey   String?   @unique
+  finishedAt  DateTime?
+  createdAt   DateTime  @default(now())
+
+  @@index([queue, status, runAt])
+  @@map("background_jobs")
+}
+
+enum ReportFormat {
+  PDF
+  XLSX
+  CSV
+}
+
+model ReportExport {
+  id            String       @id @default(uuid()) @db.Uuid
+  /// A key of the code-defined report registry (text, so adding a report never needs a migration).
+  kind          String
+  format        ReportFormat
+  params        Json         @default("{}")
+  status        JobStatus    @default(QUEUED)
+  fileId        String?      @db.Uuid
+  requestedById String?      @db.Uuid
+  error         String?
+  createdAt     DateTime     @default(now())
+  finishedAt    DateTime?
+
+  @@index([requestedById, createdAt])
+  @@map("report_exports")
+}
+
+enum BackupKind {
+  LOCAL
+  CLOUD
+}
+
+enum BackupStatus {
+  RUNNING
+  SUCCEEDED
+  FAILED
+}
+
+model BackupRecord {
+  id            String       @id @default(uuid()) @db.Uuid
+  kind          BackupKind
+  status        BackupStatus @default(RUNNING)
+  path          String?
+  sizeBytes     BigInt?
+  sha256        String?
+  /// Set only after a restore-test / integrity check of the produced file succeeded.
+  verifiedAt    DateTime?
+  schemaVersion String?
+  error         String?
+  startedAt     DateTime     @default(now())
+  finishedAt    DateTime?
+
+  @@index([startedAt])
+  @@map("backup_records")
+}
+
+/// Pre-aggregated analytics so dashboards never recompute heavy queries per page view.
+model AnalyticsSnapshot {
+  id         String   @id @default(uuid()) @db.Uuid
+  key        String // "finance.summary", "attendance.rate", …
+  scope      String   @default("school") // "school" | "class:<id>" | "term:<id>"
+  data       Json
+  computedAt DateTime @default(now())
+
+  @@unique([key, scope])
+  @@map("analytics_snapshots")
+}
+
+model WorkerHeartbeat {
+  name       String   @id
+  lastBeatAt DateTime @default(now())
+  status     String   @default("OK")
+  meta       Json?
+
+  @@map("worker_heartbeats")
+}
+
+/// Atomic human-readable number generator (receipts, invoices, admission/staff numbers).
+model NumberSequence {
+  key     String @id // e.g. "receipt:2026", "admission-number:2026"
+  nextVal Int    @default(1)
+
+  @@map("number_sequences")
+}
+
+// ───────────── Synchronization plane ─────────────
+
+enum SyncOperation {
+  UPSERT
+  DELETE
+}
+
+enum SyncStatus {
+  PENDING
+  IN_FLIGHT
+  ACKED
+  FAILED
+  CONFLICT
+  DEAD
+}
+
+/// Transactional outbox. A row is written in the SAME transaction as the business mutation it describes.
+model SyncQueue {
+  id             String        @id @default(uuid()) @db.Uuid
+  seq            BigInt        @unique @default(autoincrement())
+  entityType     String
+  entityId       String
+  operation      SyncOperation
+  /// Snapshot of the entity (or a reference-only payload for large entities).
+  payload        Json
+  entityVersion  Int           @default(1)
+  /// Stable across retries; the cloud treats a repeated key as already-applied.
+  idempotencyKey String        @unique
+  status         SyncStatus    @default(PENDING)
+  retryCount     Int           @default(0)
+  nextAttemptAt  DateTime      @default(now())
+  lastAttemptAt  DateTime?
+  lastError      String?
+  createdAt      DateTime      @default(now())
+  ackedAt        DateTime?
+
+  conflicts SyncConflict[]
+
+  @@index([status, nextAttemptAt, seq])
+  @@index([entityType, entityId])
+  @@map("sync_queue")
+}
+
+enum ConflictStatus {
+  OPEN
+  RESOLVED_LOCAL
+  RESOLVED_CLOUD
+  RESOLVED_MERGED
+}
+
+model SyncConflict {
+  id           String         @id @default(uuid()) @db.Uuid
+  queueId      String?        @db.Uuid
+  entityType   String
+  entityId     String
+  localVersion Int
+  cloudVersion Int
+  localPayload Json
+  cloudPayload Json
+  status       ConflictStatus @default(OPEN)
+  resolvedById String?        @db.Uuid
+  resolvedAt   DateTime?
+  resolution   Json?
+  createdAt    DateTime       @default(now())
+
+  queue SyncQueue? @relation(fields: [queueId], references: [id], onDelete: SetNull)
+
+  @@index([status])
+  @@index([entityType, entityId])
+  @@map("sync_conflicts")
+}
+
+/// Pull position per stream (e.g. "config" — the last cloud command/config revision applied).
+model SyncCursor {
+  name      String   @id
+  value     String
+  updatedAt DateTime @updatedAt
+
+  @@map("sync_cursors")
+}
+
+enum SyncDeviceKind {
+  SERVER
+  KIOSK
+  TABLET
+}
+
+model SyncDevice {
+  id         String         @id @default(uuid()) @db.Uuid
+  name       String         @unique
+  kind       SyncDeviceKind
+  lastSeenAt DateTime?
+  lastSyncAt DateTime?
+  isActive   Boolean        @default(true)
+  createdAt  DateTime       @default(now())
+
+  @@map("sync_devices")
+}

@@ -1,0 +1,8 @@
+**/node_modules
+**/.next
+**/.data
+**/.env
+**/test-results
+**/e2e/.state.json
+**/*.tsbuildinfo
+.git

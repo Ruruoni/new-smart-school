@@ -1,0 +1,70 @@
+// ───────────────────────── ADMISSIONS ─────────────────────────
+
+enum AdmissionStatus {
+  DRAFT
+  SUBMITTED
+  UNDER_REVIEW
+  VERIFIED
+  APPROVED
+  REJECTED
+  ENROLLED
+}
+
+model AdmissionRecord {
+  id                      String          @id @default(uuid()) @db.Uuid
+  applicationNumber       String          @unique
+  status                  AdmissionStatus @default(DRAFT)
+  // applicant
+  firstName               String
+  middleName              String?
+  lastName                String
+  gender                  Gender
+  dateOfBirth             DateTime        @db.Date
+  stateOfOrigin           String?
+  lga                     String?
+  religion                String?
+  address                 String?
+  previousSchool          String?
+  desiredClassId          String?         @db.Uuid
+  // primary guardian contact
+  guardianName            String
+  guardianRelationship    String
+  guardianPhone           String
+  guardianEmail           String?
+  guardianAddress         String?
+  // workflow
+  applicationFeeInvoiceId String?         @unique @db.Uuid
+  submittedAt             DateTime?
+  reviewedById            String?         @db.Uuid
+  reviewedAt              DateTime?
+  decisionNote            String?
+  approvedClassId         String?         @db.Uuid
+  /// Public status-check secret shown to the applicant once (stored hashed).
+  accessCodeHash          String?
+  version                 Int             @default(1)
+  createdAt               DateTime        @default(now())
+  updatedAt               DateTime        @updatedAt
+
+  documents             AdmissionDocument[]
+  student               StudentProfile?
+  applicationFeeInvoice Invoice?            @relation("ApplicationFee", fields: [applicationFeeInvoiceId], references: [id], onDelete: SetNull)
+
+  @@index([status, createdAt])
+  @@index([guardianPhone])
+  @@map("admission_records")
+}
+
+model AdmissionDocument {
+  id           String   @id @default(uuid()) @db.Uuid
+  admissionId  String   @db.Uuid
+  kind         String // "BIRTH_CERTIFICATE", "PASSPORT_PHOTO", "PREVIOUS_RESULT"
+  fileId       String   @db.Uuid
+  verified     Boolean  @default(false)
+  verifiedById String?  @db.Uuid
+  uploadedAt   DateTime @default(now())
+
+  admission AdmissionRecord @relation(fields: [admissionId], references: [id], onDelete: Cascade)
+
+  @@index([admissionId])
+  @@map("admission_documents")
+}

@@ -1,0 +1,254 @@
+// ───────────────────────── CBT + EXAMINATION PREPARATION ─────────────────────────
+// ONE engine serves school exams and WAEC / NECO / JAMB / BECE practice: exam bodies are data, not code.
+
+enum ExamBody {
+  INTERNAL
+  WAEC
+  NECO
+  JAMB
+  BECE
+}
+
+enum QuestionType {
+  MCQ_SINGLE
+  MCQ_MULTIPLE
+  TRUE_FALSE
+}
+
+enum Difficulty {
+  EASY
+  MEDIUM
+  HARD
+}
+
+/// Topic tree: parentId gives sub-topics. Used for weak-topic analysis.
+model CBTTopic {
+  id        String    @id @default(uuid()) @db.Uuid
+  subjectId String    @db.Uuid
+  parentId  String?   @db.Uuid
+  name      String
+  examBody  ExamBody?
+
+  subject     Subject               @relation(fields: [subjectId], references: [id], onDelete: Cascade)
+  parent      CBTTopic?             @relation("TopicTree", fields: [parentId], references: [id], onDelete: SetNull)
+  children    CBTTopic[]            @relation("TopicTree")
+  questions   CBTQuestion[]
+  performance CBTTopicPerformance[]
+
+  @@unique([subjectId, parentId, name])
+  @@map("cbt_topics")
+}
+
+model CBTQuestion {
+  id          String       @id @default(uuid()) @db.Uuid
+  subjectId   String       @db.Uuid
+  topicId     String?      @db.Uuid
+  examBody    ExamBody     @default(INTERNAL)
+  /// Past-paper year for WAEC/NECO/JAMB/BECE questions.
+  year        Int?
+  difficulty  Difficulty   @default(MEDIUM)
+  type        QuestionType @default(MCQ_SINGLE)
+  stem        String
+  explanation String?
+  isActive    Boolean      @default(true)
+  createdById String?      @db.Uuid
+  version     Int          @default(1)
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+
+  subject   Subject             @relation(fields: [subjectId], references: [id], onDelete: Restrict)
+  topic     CBTTopic?           @relation(fields: [topicId], references: [id], onDelete: SetNull)
+  options   CBTQuestionOption[]
+  examLinks CBTExamQuestion[]
+
+  @@index([subjectId, examBody, difficulty])
+  @@index([topicId])
+  @@index([examBody, year])
+  @@map("cbt_questions")
+}
+
+model CBTQuestionOption {
+  id         String  @id @default(uuid()) @db.Uuid
+  questionId String  @db.Uuid
+  label      String // "A", "B", …
+  text       String
+  isCorrect  Boolean @default(false)
+  sortOrder  Int     @default(0)
+
+  question CBTQuestion @relation(fields: [questionId], references: [id], onDelete: Cascade)
+
+  @@unique([questionId, label])
+  @@map("cbt_question_options")
+}
+
+enum ExamKind {
+  SCHOOL
+  PRACTICE
+  MOCK
+}
+
+enum CBTExamStatus {
+  DRAFT
+  SCHEDULED
+  OPEN
+  CLOSED
+}
+
+model CBTExam {
+  id                    String        @id @default(uuid()) @db.Uuid
+  title                 String
+  kind                  ExamKind      @default(SCHOOL)
+  examBody              ExamBody      @default(INTERNAL)
+  subjectId             String?       @db.Uuid
+  /// Class ids allowed to sit this exam; empty = any student (practice).
+  classIds              String[]
+  durationMinutes       Int
+  passMark              Decimal       @default(50) @db.Decimal(5, 2)
+  shuffleQuestions      Boolean       @default(false)
+  shuffleOptions        Boolean       @default(false)
+  maxAttempts           Int           @default(1)
+  opensAt               DateTime?
+  closesAt              DateTime?
+  showResultImmediately Boolean       @default(false)
+  status                CBTExamStatus @default(DRAFT)
+  config                Json          @default("{}")
+  createdById           String?       @db.Uuid
+  version               Int           @default(1)
+  createdAt             DateTime      @default(now())
+  updatedAt             DateTime      @updatedAt
+
+  subject   Subject?          @relation(fields: [subjectId], references: [id], onDelete: SetNull)
+  sections  CBTExamSection[]
+  questions CBTExamQuestion[]
+  attempts  CBTAttempt[]
+
+  @@index([status, opensAt])
+  @@index([kind, examBody])
+  @@index([subjectId])
+  @@map("cbt_exams")
+}
+
+model CBTExamSection {
+  id           String  @id @default(uuid()) @db.Uuid
+  examId       String  @db.Uuid
+  title        String
+  instructions String?
+  sortOrder    Int     @default(0)
+
+  exam      CBTExam           @relation(fields: [examId], references: [id], onDelete: Cascade)
+  questions CBTExamQuestion[]
+
+  @@index([examId])
+  @@map("cbt_exam_sections")
+}
+
+model CBTExamQuestion {
+  id         String  @id @default(uuid()) @db.Uuid
+  examId     String  @db.Uuid
+  sectionId  String? @db.Uuid
+  questionId String  @db.Uuid
+  sortOrder  Int     @default(0)
+  marks      Decimal @default(1) @db.Decimal(6, 2)
+
+  exam     CBTExam         @relation(fields: [examId], references: [id], onDelete: Cascade)
+  section  CBTExamSection? @relation(fields: [sectionId], references: [id], onDelete: SetNull)
+  question CBTQuestion     @relation(fields: [questionId], references: [id], onDelete: Restrict)
+  answers  CBTAnswer[]
+
+  @@unique([examId, questionId])
+  @@index([examId, sortOrder])
+  @@index([questionId])
+  @@index([sectionId])
+  @@map("cbt_exam_questions")
+}
+
+enum AttemptStatus {
+  IN_PROGRESS
+  SUBMITTED
+  EXPIRED
+}
+
+/// `deadlineAt` is authoritative on the SERVER: the browser timer is only a display. Answers are
+/// accepted until deadlineAt (+ small grace) and an attempt past deadline is auto-submitted.
+model CBTAttempt {
+  id              String        @id @default(uuid()) @db.Uuid
+  examId          String        @db.Uuid
+  studentId       String        @db.Uuid
+  attemptNumber   Int           @default(1)
+  status          AttemptStatus @default(IN_PROGRESS)
+  startedAt       DateTime      @default(now())
+  deadlineAt      DateTime
+  submittedAt     DateTime?
+  /// Frozen question order for this attempt (shuffle is decided once, so recovery shows the same paper).
+  questionOrder   Json          @default("[]")
+  autosaveSeq     Int           @default(0)
+  lastSavedAt     DateTime?
+  clientSessionId String?
+  version         Int           @default(1)
+  createdAt       DateTime      @default(now())
+
+  exam    CBTExam        @relation(fields: [examId], references: [id], onDelete: Restrict)
+  student StudentProfile @relation(fields: [studentId], references: [id], onDelete: Restrict)
+  answers CBTAnswer[]
+  result  CBTResult?
+
+  @@unique([examId, studentId, attemptNumber])
+  @@index([studentId, status])
+  @@index([status, deadlineAt])
+  @@map("cbt_attempts")
+}
+
+model CBTAnswer {
+  id                String    @id @default(uuid()) @db.Uuid
+  attemptId         String    @db.Uuid
+  examQuestionId    String    @db.Uuid
+  selectedOptionIds String[]
+  flagged           Boolean   @default(false)
+  visited           Boolean   @default(true)
+  /// Monotonic per-client sequence; older writes never overwrite newer ones (replay-safe autosave).
+  clientSeq         Int       @default(0)
+  answeredAt        DateTime?
+  updatedAt         DateTime  @updatedAt
+
+  attempt      CBTAttempt      @relation(fields: [attemptId], references: [id], onDelete: Cascade)
+  examQuestion CBTExamQuestion @relation(fields: [examQuestionId], references: [id], onDelete: Restrict)
+
+  @@unique([attemptId, examQuestionId])
+  @@map("cbt_answers")
+}
+
+model CBTResult {
+  id              String    @id @default(uuid()) @db.Uuid
+  attemptId       String    @unique @db.Uuid
+  score           Decimal   @db.Decimal(8, 2)
+  totalMarks      Decimal   @db.Decimal(8, 2)
+  percentage      Decimal   @db.Decimal(5, 2)
+  passed          Boolean
+  correctCount    Int
+  wrongCount      Int
+  unansweredCount Int
+  /// Per-topic {topicId: {attempted, correct}} snapshot for analytics.
+  breakdown       Json      @default("{}")
+  publishedAt     DateTime?
+  createdAt       DateTime  @default(now())
+
+  attempt CBTAttempt @relation(fields: [attemptId], references: [id], onDelete: Cascade)
+
+  @@map("cbt_results")
+}
+
+/// Running per-student per-topic tally driving weak-topic analysis (updated when an attempt is scored).
+model CBTTopicPerformance {
+  studentId String   @db.Uuid
+  topicId   String   @db.Uuid
+  attempted Int      @default(0)
+  correct   Int      @default(0)
+  updatedAt DateTime @updatedAt
+
+  student StudentProfile @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  topic   CBTTopic       @relation(fields: [topicId], references: [id], onDelete: Cascade)
+
+  @@id([studentId, topicId])
+  @@index([topicId])
+  @@map("cbt_topic_performance")
+}

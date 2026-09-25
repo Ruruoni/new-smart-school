@@ -1,0 +1,41 @@
+"use client";
+import { useEffect, useState } from "react";
+import { api, useApi, useMutation } from "@/lib/api";
+import { Button, Checkbox, DataState, ErrorNote, Field, PageHeader, Panel, TabPanel, Tabs, TextField, Textarea, useToast } from "@/ui/kit";
+import { useSession } from "@/ui/session";
+
+interface Profile { version: number; schoolName: string; shortName: string | null; motto: string | null; address: string | null; city: string | null; state: string | null; phone: string | null; email: string | null; website: string | null; primaryColor: string; logoFileId: string | null; installationCode: string }
+type Tab = "profile" | "attendance" | "results" | "cbt" | "admissions";
+
+export default function SchoolSettings() {
+  const [tab, setTab] = useState<Tab>("profile");
+  return (<><PageHeader title="School settings" description="Everything here is this school's own choice — nothing is hard-coded to one school's way of working." />
+    <Tabs label="Settings" value={tab} onChange={setTab} tabs={[{ id: "profile", label: "Profile & branding" }, { id: "attendance", label: "Attendance" }, { id: "results", label: "Results" }, { id: "cbt", label: "CBT" }, { id: "admissions", label: "Admissions" }]} />
+    <TabPanel id="profile" active={tab === "profile"}><ProfileForm /></TabPanel>
+    <TabPanel id="attendance" active={tab === "attendance"}><Policy k="attendance.policy" title="Attendance rules" render={(v, set) => (<><div className="grid gap-4 sm:grid-cols-2"><TextField label="Late after (time)" type="time" value={String(v.lateAfter)} onChange={(e) => set({ ...v, lateAfter: e.target.value })} hint="Arrivals after this are marked late" /><TextField label="Absent after (time)" type="time" value={String(v.absentAfter)} onChange={(e) => set({ ...v, absentAfter: e.target.value })} hint="Students with no mark by this time are marked absent" /></div><Checkbox label="Tell guardians when their child is absent" checked={!!v.notifyGuardiansOnAbsence} onChange={(e) => set({ ...v, notifyGuardiansOnAbsence: e.target.checked })} /></>)} /></TabPanel>
+    <TabPanel id="results" active={tab === "results"}><Policy k="results.policy" title="Result rules" render={(v, set) => (<><Checkbox label="Show class positions on report cards" checked={!!v.showPositions} onChange={(e) => set({ ...v, showPositions: e.target.checked })} /><Checkbox label="Show cumulative average across the year's terms" checked={!!v.cumulativeAcrossTerms} onChange={(e) => set({ ...v, cumulativeAcrossTerms: e.target.checked })} /><TextField label="Minimum yearly average to be promoted (%)" type="number" min={0} max={100} value={Number(v.promotionMinimumAverage)} onChange={(e) => set({ ...v, promotionMinimumAverage: Number(e.target.value) })} className="max-w-xs" /></>)} /></TabPanel>
+    <TabPanel id="cbt" active={tab === "cbt"}><Policy k="cbt.defaults" title="CBT defaults" render={(v, set) => (<><Checkbox label="Require full screen for school exams" checked={!!v.requireFullscreen} onChange={(e) => set({ ...v, requireFullscreen: e.target.checked })} /><div className="grid gap-4 sm:grid-cols-3"><TextField label="Autosave every (seconds)" type="number" min={2} value={Number(v.autosaveSeconds)} onChange={(e) => set({ ...v, autosaveSeconds: Number(e.target.value) })} /><TextField label="Grace after time is up (seconds)" type="number" min={0} value={Number(v.graceSeconds)} onChange={(e) => set({ ...v, graceSeconds: Number(e.target.value) })} /><TextField label="Late-sync window (minutes)" type="number" min={0} max={120} value={Number(v.offlineSyncWindowMinutes)} onChange={(e) => set({ ...v, offlineSyncWindowMinutes: Number(e.target.value) })} hint="Answers made in time but delivered late (Wi-Fi drop) are still accepted for this long" /></div></>)} /></TabPanel>
+    <TabPanel id="admissions" active={tab === "admissions"}><Policy k="admissions.policy" title="Admissions" render={(v, set) => (<><Checkbox label="Accept new applications" checked={!!v.open} onChange={(e) => set({ ...v, open: e.target.checked })} /><TextField label="Application fee (₦, 0 for none)" type="number" min={0} value={Number(v.applicationFee)} onChange={(e) => set({ ...v, applicationFee: Number(e.target.value) })} className="max-w-xs" /><Checkbox label="Start review only after the fee is paid" checked={!!v.requireFeePaidBeforeReview} onChange={(e) => set({ ...v, requireFeePaidBeforeReview: e.target.checked })} /><Field label="Instructions shown to applicants" htmlFor="ins"><Textarea id="ins" value={String(v.instructions ?? "")} onChange={(e) => set({ ...v, instructions: e.target.value })} /></Field></>)} /></TabPanel>
+  </>);
+}
+
+function ProfileForm() {
+  const q = useApi<Profile>("/settings/profile"); const toast = useToast(); const { reload } = useSession();
+  const [f, setF] = useState<Partial<Profile>>({});
+  useEffect(() => { if (q.data) setF(q.data); }, [q.data]);
+  const save = useMutation(async () => { const { installationCode: _c, logoFileId: _l, ...rest } = f as Profile; await api.patch("/settings/profile", { ...rest, version: q.data!.version }); toast.push("ok", "Saved"); q.reload(); reload(); });
+  const logo = useMutation(async (file: File) => { const fd = new FormData(); fd.set("file", file); await api.post("/settings/logo", fd); toast.push("ok", "Logo updated"); q.reload(); reload(); });
+  const s = (k: keyof Profile) => (e: React.ChangeEvent<HTMLInputElement>) => setF({ ...f, [k]: e.target.value });
+  return <DataState query={q}>{(p) => (
+    <div className="grid gap-6 lg:grid-cols-[2fr_1fr]">
+      <Panel title="School profile"><div className="space-y-4"><TextField label="School name" value={f.schoolName ?? ""} onChange={s("schoolName")} /><div className="grid gap-4 sm:grid-cols-2"><TextField label="Short name" value={f.shortName ?? ""} onChange={s("shortName")} /><TextField label="Motto" value={f.motto ?? ""} onChange={s("motto")} /></div><TextField label="Address" value={f.address ?? ""} onChange={s("address")} /><div className="grid gap-4 sm:grid-cols-2"><TextField label="City" value={f.city ?? ""} onChange={s("city")} /><TextField label="State" value={f.state ?? ""} onChange={s("state")} /></div><div className="grid gap-4 sm:grid-cols-2"><TextField label="Phone" value={f.phone ?? ""} onChange={s("phone")} /><TextField label="Email" type="email" value={f.email ?? ""} onChange={s("email")} /></div><TextField label="Website" value={f.website ?? ""} onChange={s("website")} /><ErrorNote error={save.error} /><Button loading={save.pending} onClick={() => void save.run()}>Save profile</Button></div></Panel>
+      <div className="space-y-6"><Panel title="Logo">{p.logoFileId ? <img src="/api/public/logo" alt="School logo" className="mb-3 h-24 rounded border border-line bg-white object-contain p-1" /> : <p className="mb-3 text-ink-500">No logo yet. It appears on report cards, the login page and the top of the menu.</p>}<label className="inline-flex min-h-11 cursor-pointer items-center rounded-md border border-ink-300 bg-surface px-4 font-bold hover:bg-ink-100 focus-within:outline-3 focus-within:outline-brand-500">Upload logo<input type="file" className="sr-only" accept="image/png,image/jpeg,image/webp" onChange={(e) => e.target.files?.[0] && void logo.run(e.target.files[0])} /></label><p className="mt-2 text-sm text-ink-500">PNG or JPG, up to 2 MB.</p><ErrorNote error={logo.error} /></Panel><Panel title="Installation"><p className="text-ink-500">Installation code</p><p className="num text-xl font-bold">{p.installationCode}</p></Panel></div>
+    </div>)}</DataState>;
+}
+
+function Policy({ k, title, render }: { k: string; title: string; render: (v: Record<string, unknown>, set: (v: Record<string, unknown>) => void) => React.ReactNode }) {
+  const q = useApi<Record<string, unknown>>(`/settings/policies/${k}`); const toast = useToast(); const [v, setV] = useState<Record<string, unknown> | null>(null);
+  const cur = v ?? q.data;
+  const save = useMutation(async () => { await api.put(`/settings/policies/${k}`, cur); toast.push("ok", "Saved"); setV(null); q.reload(); });
+  return <DataState query={q}>{() => cur && <Panel title={title}><div className="max-w-2xl space-y-4">{render(cur, setV)}<ErrorNote error={save.error} /><Button loading={save.pending} disabled={!v} onClick={() => void save.run()}>Save</Button></div></Panel>}</DataState>;
+}

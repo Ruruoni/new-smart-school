@@ -1,0 +1,201 @@
+// ───────────────────────── SCHOOL STRUCTURE ─────────────────────────
+
+model AcademicYear {
+  id        String   @id @default(uuid()) @db.Uuid
+  name      String   @unique // "2025/2026"
+  startDate DateTime @db.Date
+  endDate   DateTime @db.Date
+  isCurrent Boolean  @default(false)
+  version   Int      @default(1)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  terms         Term[]
+  enrollments   Enrollment[]
+  feeStructures FeeStructure[]
+  promotions    PromotionRecord[]
+
+  @@map("academic_years")
+}
+
+model Term {
+  id             String   @id @default(uuid()) @db.Uuid
+  academicYearId String   @db.Uuid
+  name           String // "First Term"
+  sequence       Int // 1, 2, 3
+  startDate      DateTime @db.Date
+  endDate        DateTime @db.Date
+  isCurrent      Boolean  @default(false)
+  version        Int      @default(1)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  academicYear  AcademicYear   @relation(fields: [academicYearId], references: [id], onDelete: Restrict)
+  assessments   Assessment[]
+  examResults   ExamResult[]
+  reportCards   ReportCard[]
+  invoices      Invoice[]
+  studentFees   StudentFee[]
+  timetables    Timetable[]
+  examinations  Examination[]
+  feeStructures FeeStructure[]
+
+  @@unique([academicYearId, sequence])
+  @@index([isCurrent])
+  @@map("terms")
+}
+
+enum SchoolStage {
+  NURSERY
+  PRIMARY
+  JUNIOR_SECONDARY
+  SENIOR_SECONDARY
+}
+
+model SchoolClass {
+  id          String      @id @default(uuid()) @db.Uuid
+  name        String      @unique // "JSS 1", "SS 3"
+  level       Int // ordering / promotion path: 1..n
+  stage       SchoolStage
+  /// Next class in the promotion path. Null for the terminal class (graduation).
+  nextClassId String?     @db.Uuid
+  version     Int         @default(1)
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+
+  nextClass       SchoolClass?      @relation("PromotionPath", fields: [nextClassId], references: [id], onDelete: SetNull)
+  previousClasses SchoolClass[]     @relation("PromotionPath")
+  sections        Section[]
+  enrollments     Enrollment[]
+  classSubjects   ClassSubject[]
+  feeStructures   FeeStructure[]
+  slots           TimetableSlot[]
+  lessonNotes     LessonNote[]
+  promotionsTo    PromotionRecord[]
+  examinations    Examination[]
+
+  @@index([level])
+  @@map("classes")
+}
+
+/// An arm/stream of a class, e.g. "JSS 1 A".
+model Section {
+  id            String   @id @default(uuid()) @db.Uuid
+  classId       String   @db.Uuid
+  name          String // "A", "Gold"
+  capacity      Int?
+  formTeacherId String?  @db.Uuid
+  createdAt     DateTime @default(now())
+
+  class         SchoolClass     @relation(fields: [classId], references: [id], onDelete: Restrict)
+  formTeacher   TeacherProfile? @relation(fields: [formTeacherId], references: [id], onDelete: SetNull)
+  enrollments   Enrollment[]
+  slots         TimetableSlot[]
+  classSubjects ClassSubject[]
+
+  @@unique([classId, name])
+  @@index([formTeacherId])
+  @@map("sections")
+}
+
+model Subject {
+  id           String   @id @default(uuid()) @db.Uuid
+  code         String   @unique
+  name         String
+  category     String? // "Core", "Science", "Arts", "Vocational"
+  isCompulsory Boolean  @default(false)
+  isActive     Boolean  @default(true)
+  version      Int      @default(1)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  curricula     Curriculum[]
+  classSubjects ClassSubject[]
+  slots         TimetableSlot[]
+  lessonNotes   LessonNote[]
+  cbtQuestions  CBTQuestion[]
+  cbtTopics     CBTTopic[]
+  cbtExams      CBTExam[]
+
+  @@map("subjects")
+}
+
+/// What a subject covers at a class level (scheme of work outline).
+model Curriculum {
+  id          String   @id @default(uuid()) @db.Uuid
+  subjectId   String   @db.Uuid
+  classLevel  Int
+  title       String
+  description String?
+  topics      Json     @default("[]") // ordered topic outline
+  version     Int      @default(1)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  subject Subject @relation(fields: [subjectId], references: [id], onDelete: Cascade)
+
+  @@unique([subjectId, classLevel])
+  @@map("curricula")
+}
+
+/// A subject taught to a class (optionally a section) by a teacher — the anchor for assessments and slots.
+model ClassSubject {
+  id        String   @id @default(uuid()) @db.Uuid
+  classId   String   @db.Uuid
+  /// "*" semantics via null: null section = whole class.
+  sectionId String?  @db.Uuid
+  subjectId String   @db.Uuid
+  teacherId String?  @db.Uuid
+  createdAt DateTime @default(now())
+
+  class       SchoolClass     @relation(fields: [classId], references: [id], onDelete: Cascade)
+  section     Section?        @relation(fields: [sectionId], references: [id], onDelete: Cascade)
+  subject     Subject         @relation(fields: [subjectId], references: [id], onDelete: Restrict)
+  teacher     TeacherProfile? @relation(fields: [teacherId], references: [id], onDelete: SetNull)
+  assessments Assessment[]
+  examResults ExamResult[]
+
+  @@unique([classId, sectionId, subjectId])
+  @@index([teacherId])
+  @@index([sectionId])
+  @@index([subjectId])
+  @@map("class_subjects")
+}
+
+enum RoomKind {
+  CLASSROOM
+  LABORATORY
+  HALL
+  LIBRARY
+  ICT_LAB
+  OTHER
+}
+
+model Room {
+  id        String   @id @default(uuid()) @db.Uuid
+  name      String   @unique
+  kind      RoomKind @default(CLASSROOM)
+  capacity  Int?
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+
+  slots     TimetableSlot[]
+  resources Resource[]
+
+  @@map("rooms")
+}
+
+/// A schedulable shared resource: projector, bus, science kit, sports field…
+model Resource {
+  id        String   @id @default(uuid()) @db.Uuid
+  name      String   @unique
+  kind      String
+  roomId    String?  @db.Uuid
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+
+  room  Room?           @relation(fields: [roomId], references: [id], onDelete: SetNull)
+  slots TimetableSlot[]
+
+  @@map("resources")
+}

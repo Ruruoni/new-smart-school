@@ -1,0 +1,18 @@
+{
+  "name": "smartschool-erp",
+  "version": "2.0.0",
+  "private": true,
+  "packageManager": "pnpm@12.4.1",
+  "engines": { "node": ">=22" },
+  "scripts": {
+    "dev:db": "tsx tools/dev-postgres.ts",
+    "typecheck": "pnpm -r typecheck",
+    "test": "pnpm -r test"
+  },
+  "devDependencies": {
+    "embedded-postgres": "18.4.0-beta.17",
+    "tsx": "^4.23.15",
+    "typescript": "^5.9.0",
+    "@types/node": "^24.0.0"
+  }
+}

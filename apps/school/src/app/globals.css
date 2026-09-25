@@ -1,0 +1,116 @@
+@import "tailwindcss";
+@import "@fontsource/atkinson-hyperlegible/latin-400.css";
+@import "@fontsource/atkinson-hyperlegible/latin-700.css";
+@import "@fontsource/atkinson-hyperlegible/latin-ext-400.css";
+@import "@fontsource/atkinson-hyperlegible/latin-ext-700.css";
+@import "@fontsource-variable/source-serif-4/wght.css";
+
+/*
+  SmartSchool design tokens — "the register".
+  Deep slate + teal. Rows are ruled like an exercise book and carry a coloured margin rule that encodes their state.
+  All colour pairs used for text meet WCAG AA (4.5:1) on their intended background.
+*/
+@theme {
+  --font-sans: "Atkinson Hyperlegible", "Segoe UI", ui-sans-serif, system-ui, "Noto Sans", Roboto, sans-serif;
+  --font-serif: "Source Serif 4 Variable", Georgia, "Times New Roman", serif;
+
+  --color-ink-950: #0a1319;
+  --color-ink-900: #0f1b24;
+  --color-ink-800: #1a2b37;
+  --color-ink-700: #263a48;
+  --color-ink-600: #3a5061;
+  --color-ink-500: #566d7d; /* muted text on paper: 5.0:1 */
+  --color-ink-400: #7d919f;
+  --color-ink-300: #a9b8c2;
+  --color-ink-200: #cfd9df;
+  --color-ink-100: #e5ebef;
+
+  --color-paper: #f4f7f6;
+  --color-surface: #ffffff;
+  --color-line: #d9e2e6;
+
+  --color-brand-900: #0b3f3b;
+  --color-brand-800: #0d5c56;
+  --color-brand-700: #0f766e; /* primary: white text 5.5:1 */
+  --color-brand-600: #12857b;
+  --color-brand-500: #14b8a6; /* accent on dark surfaces */
+  --color-brand-300: #7ddfd2;
+  --color-brand-100: #d8f2ee;
+  --color-brand-50: #eef9f7;
+
+  --color-pen-700: #b42318; /* marking-pen red: errors, overdue, absent */
+  --color-pen-100: #fde8e6;
+  --color-amber-700: #a35200;
+  --color-amber-100: #fdf0d5;
+  --color-leaf-700: #157347;
+  --color-leaf-100: #dcf3e6;
+  --color-sky-700: #1b5f9e;
+  --color-sky-100: #e0eefb;
+
+  --radius-ctl: 6px;
+  --radius-panel: 10px;
+  --shadow-pop: 0 10px 30px -8px rgba(10, 19, 25, 0.35);
+}
+
+:root {
+  color-scheme: light;
+  --rule-ok: var(--color-leaf-700);
+  --rule-warn: #d98a00;
+  --rule-bad: var(--color-pen-700);
+  --rule-info: var(--color-sky-700);
+  --rule-none: transparent;
+}
+
+html { font-size: 16px; -webkit-text-size-adjust: 100%; }
+body { background: var(--color-paper); color: var(--color-ink-900); font-family: var(--font-sans); line-height: 1.55; font-feature-settings: "tnum" 0; }
+h1, h2, h3, h4 { text-wrap: balance; }
+p, li { text-wrap: pretty; }
+.num { font-variant-numeric: tabular-nums; }
+
+/* Keyboard focus must always be visible, on every surface. */
+:focus-visible { outline: 3px solid var(--color-brand-500); outline-offset: 2px; border-radius: 4px; }
+.on-dark :focus-visible { outline-color: var(--color-brand-300); }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; transition-duration: 0.01ms !important; scroll-behavior: auto !important; }
+}
+
+/* ── The register: ruled rows with a state margin ── */
+.register { width: 100%; border-collapse: separate; border-spacing: 0; font-size: 0.9375rem; }
+.register thead th { position: sticky; top: 0; z-index: 10; background: var(--color-ink-100); color: var(--color-ink-700); font-weight: 700; text-align: left; padding: 0.55rem 0.75rem; border-bottom: 2px solid var(--color-ink-300); white-space: nowrap; }
+.register td { padding: 0.55rem 0.75rem; border-bottom: 1px solid var(--color-line); vertical-align: middle; }
+.register tbody tr:hover td { background: var(--color-brand-50); }
+.register td:first-child { box-shadow: inset 3px 0 0 var(--rule, var(--rule-none)); }
+.register tr[data-rule="ok"] { --rule: var(--rule-ok); }
+.register tr[data-rule="warn"] { --rule: var(--rule-warn); }
+.register tr[data-rule="bad"] { --rule: var(--rule-bad); }
+.register tr[data-rule="info"] { --rule: var(--rule-info); }
+.register .right { text-align: right; }
+.register .center { text-align: center; }
+.register.compact td, .register.compact thead th { padding-top: 0.3rem; padding-bottom: 0.3rem; }
+
+/* Spreadsheet-style grid used for score entry / attendance (dense, keyboard-first) */
+.sheet { border-collapse: separate; border-spacing: 0; font-size: 0.9375rem; }
+.sheet th, .sheet td { border-right: 1px solid var(--color-line); border-bottom: 1px solid var(--color-line); padding: 0; }
+.sheet thead th { position: sticky; top: 0; background: var(--color-ink-100); z-index: 20; padding: 0.5rem 0.6rem; text-align: left; }
+.sheet tbody th { position: sticky; left: 0; background: var(--color-surface); z-index: 10; padding: 0.4rem 0.7rem; text-align: left; font-weight: 400; white-space: nowrap; box-shadow: inset 3px 0 0 var(--rule, var(--rule-none)); }
+.sheet input.cell { width: 100%; min-width: 4.5rem; height: 2.5rem; padding: 0 0.6rem; border: 0; background: transparent; text-align: right; font: inherit; font-variant-numeric: tabular-nums; }
+.sheet input.cell:focus { outline: 2px solid var(--color-brand-600); outline-offset: -2px; background: var(--color-brand-50); border-radius: 0; }
+.sheet td[data-state="saving"] { background: var(--color-amber-100); }
+.sheet td[data-state="saved"] { background: var(--color-leaf-100); transition: background 1.2s ease-out; }
+.sheet td[data-state="error"], .sheet td[data-state="conflict"] { background: var(--color-pen-100); }
+
+/* CBT answer-sheet map */
+.qmap button { width: 2.75rem; height: 2.75rem; border-radius: 6px; font-weight: 700; border: 2px solid transparent; font-variant-numeric: tabular-nums; }
+.qmap button[data-s="unvisited"] { background: var(--color-ink-100); color: var(--color-ink-700); }
+.qmap button[data-s="answered"] { background: var(--color-leaf-700); color: #fff; }
+.qmap button[data-s="flagged"], .qmap button[data-s="answeredFlagged"] { background: #f5b301; color: #2b1d00; }
+.qmap button[data-s="answeredFlagged"] { box-shadow: inset 0 -5px 0 var(--color-leaf-700); }
+.qmap button[data-s="visited"] { background: #fff; color: var(--color-ink-800); border-color: var(--color-ink-300); }
+.qmap button[aria-current="true"] { outline: 3px solid var(--color-ink-900); outline-offset: 2px; }
+
+@media print {
+  .no-print { display: none !important; }
+  body { background: #fff; }
+  .register thead th { position: static; background: #eee; }
+}

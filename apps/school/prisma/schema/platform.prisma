@@ -1,0 +1,284 @@
+// ───────────────────────── PLATFORM CORE ─────────────────────────
+// Installation identity, users, sessions, RBAC, feature flags, licensing, settings, audit, files.
+
+enum UserType {
+  ADMIN
+  TEACHER
+  STAFF
+  PARENT
+  STUDENT
+}
+
+enum UserStatus {
+  ACTIVE
+  SUSPENDED
+  DISABLED
+}
+
+/// Exactly one row per school database (enforced by the `singleton` unique column).
+model SchoolInstallation {
+  id               String    @id @default(uuid()) @db.Uuid
+  singleton        Boolean   @unique @default(true)
+  installationCode String    @unique // public identity presented to the cloud, e.g. "SS-7F3K9Q"
+  schoolName       String
+  shortName        String?
+  motto            String?
+  logoFileId       String?   @db.Uuid
+  address          String?
+  city             String?
+  state            String?
+  country          String    @default("Nigeria")
+  phone            String?
+  email            String?
+  website          String?
+  timezone         String    @default("Africa/Lagos")
+  currency         String    @default("NGN")
+  primaryColor     String    @default("#0f766e")
+  appVersion       String    @default("2.0.0")
+  schemaVersion    String    @default("1")
+  /// Credential the cloud issued at registration; stored AES-256-GCM encrypted (see platform/crypto).
+  cloudSecretEnc   String?
+  cloudUrl         String?
+  registeredAt     DateTime?
+  setupCompletedAt DateTime?
+  version          Int       @default(1)
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  @@map("school_installation")
+}
+
+model User {
+  id                 String     @id @default(uuid()) @db.Uuid
+  username           String     @unique
+  email              String?    @unique
+  phone              String?
+  passwordHash       String
+  firstName          String
+  lastName           String
+  userType           UserType
+  status             UserStatus @default(ACTIVE)
+  /// The protected owner account. A partial unique index guarantees at most one; services refuse to
+  /// delete, disable, or strip privileges from it (see platform/users).
+  isPrimaryAdmin     Boolean    @default(false)
+  mustChangePassword Boolean    @default(false)
+  failedLoginCount   Int        @default(0)
+  lockedUntil        DateTime?
+  lastLoginAt        DateTime?
+  passwordChangedAt  DateTime?
+  deletedAt          DateTime?
+  version            Int        @default(1)
+  createdAt          DateTime   @default(now())
+  updatedAt          DateTime   @updatedAt
+
+  sessions       Session[]
+  roles          UserRole[]
+  notifications  Notification[]
+  teacherProfile TeacherProfile?
+  staffProfile   StaffProfile?
+  parentProfile  ParentProfile?
+  studentProfile StudentProfile?
+  auditLogs      AuditLog[]
+
+  @@index([userType, status])
+  @@map("users")
+}
+
+model Session {
+  id         String    @id @default(uuid()) @db.Uuid
+  userId     String    @db.Uuid
+  /// SHA-256 of the opaque cookie token — the raw token is never stored.
+  tokenHash  String    @unique
+  createdAt  DateTime  @default(now())
+  expiresAt  DateTime
+  lastSeenAt DateTime  @default(now())
+  ip         String?
+  userAgent  String?
+  revokedAt  DateTime?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+  @@map("sessions")
+}
+
+model Role {
+  id          String   @id @default(uuid()) @db.Uuid
+  key         String   @unique
+  name        String
+  description String?
+  /// System roles ship with the product; their key cannot change.
+  isSystem    Boolean  @default(false)
+  /// Protected roles (Primary Admin) cannot be deleted or have permissions removed.
+  isProtected Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  permissions RolePermission[]
+  users       UserRole[]
+
+  @@map("roles")
+}
+
+model Permission {
+  id          String  @id @default(uuid()) @db.Uuid
+  /// e.g. "students.view", "finance.reverse_payment"
+  key         String  @unique
+  module      String
+  action      String
+  description String?
+
+  roles RolePermission[]
+
+  @@index([module])
+  @@map("permissions")
+}
+
+model RolePermission {
+  roleId       String @db.Uuid
+  permissionId String @db.Uuid
+
+  role       Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  permission Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  @@id([roleId, permissionId])
+  @@map("role_permissions")
+}
+
+model UserRole {
+  id        String   @id @default(uuid()) @db.Uuid
+  userId    String   @db.Uuid
+  roleId    String   @db.Uuid
+  /// Resource scope, e.g. scopeType "CLASS" + scopeId of a class. "*" = unscoped (whole school).
+  scopeType String   @default("*")
+  scopeId   String   @default("*")
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role Role @relation(fields: [roleId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, roleId, scopeType, scopeId])
+  @@index([roleId])
+  @@map("user_roles")
+}
+
+enum FlagSource {
+  LOCAL
+  CLOUD
+}
+
+model FeatureFlag {
+  id          String     @id @default(uuid()) @db.Uuid
+  key         String     @unique
+  enabled     Boolean    @default(false)
+  module      String?
+  description String?
+  /// CLOUD flags are pushed by the Developer Control Tower and win over LOCAL toggles.
+  source      FlagSource @default(LOCAL)
+  updatedAt   DateTime   @updatedAt
+
+  @@map("feature_flags")
+}
+
+model ModuleSetting {
+  id        String   @id @default(uuid()) @db.Uuid
+  moduleKey String   @unique
+  enabled   Boolean  @default(true)
+  config    Json     @default("{}")
+  updatedAt DateTime @updatedAt
+
+  @@map("module_settings")
+}
+
+enum LicenseStatus {
+  ACTIVE
+  GRACE
+  EXPIRED
+  SUSPENDED
+}
+
+/// The cloud-issued, Ed25519-signed license token, cached locally so normal operation survives outages.
+model License {
+  id             String        @id @default(uuid()) @db.Uuid
+  plan           String
+  status         LicenseStatus @default(ACTIVE)
+  modules        String[]
+  features       Json          @default("{}")
+  issuedAt       DateTime
+  expiresAt      DateTime
+  /// Days of continued full operation after expiry before restrictions apply.
+  graceDays      Int           @default(30)
+  /// Raw compact JWS as issued by the cloud; verified on every load against the embedded public key.
+  token          String
+  lastVerifiedAt DateTime?
+  isActive       Boolean       @default(true)
+  createdAt      DateTime      @default(now())
+
+  @@index([isActive])
+  @@map("licenses")
+}
+
+model SystemSetting {
+  key       String   @id
+  value     Json
+  updatedAt DateTime @updatedAt
+
+  @@map("system_settings")
+}
+
+model SchoolSetting {
+  key       String   @id
+  category  String
+  value     Json
+  version   Int      @default(1)
+  updatedAt DateTime @updatedAt
+
+  @@index([category])
+  @@map("school_settings")
+}
+
+/// Append-only. Each row carries a SHA-256 hash chained to the previous row for tamper evidence.
+model AuditLog {
+  id         String   @id @default(uuid()) @db.Uuid
+  seq        BigInt   @unique @default(autoincrement())
+  occurredAt DateTime @default(now())
+  actorId    String?  @db.Uuid
+  actorName  String?
+  action     String
+  module     String
+  entityType String?
+  entityId   String?
+  before     Json?
+  after      Json?
+  metadata   Json?
+  ip         String?
+  prevHash   String?
+  hash       String
+
+  actor User? @relation(fields: [actorId], references: [id], onDelete: SetNull)
+
+  @@index([module, action])
+  @@index([entityType, entityId])
+  @@index([actorId, occurredAt])
+  @@index([occurredAt])
+  @@map("audit_logs")
+}
+
+model FileAsset {
+  id           String    @id @default(uuid()) @db.Uuid
+  storageKey   String    @unique
+  originalName String
+  mimeType     String
+  sizeBytes    Int
+  sha256       String
+  /// What the file belongs to, e.g. ownerType "ADMISSION" / "LESSON_NOTE" / "STUDENT".
+  ownerType    String?
+  ownerId      String?
+  uploadedById String?   @db.Uuid
+  createdAt    DateTime  @default(now())
+  deletedAt    DateTime?
+
+  @@index([ownerType, ownerId])
+  @@map("file_assets")
+}
